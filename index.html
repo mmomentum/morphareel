@@ -33,6 +33,7 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             min-height: 100vh;
             padding: 20px;
+            padding-bottom: 80px; /* Space for fixed footer */
         }
 
         .container {
@@ -72,10 +73,6 @@
             border-radius: 4px;
             padding: 12px;
             margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            cursor: move;
             transition: all 0.2s ease;
         }
 
@@ -86,6 +83,13 @@
         .file-item.drag-over {
             transform: translateY(2px);
             border-color: #666;
+        }
+
+        .file-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: move;
         }
 
         .drag-handle {
@@ -104,6 +108,27 @@
             font-size: 12px;
         }
 
+        .crop-toggle {
+            background: none;
+            border: 1px solid #444;
+            color: #888;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 3px;
+            transition: all 0.2s;
+        }
+
+        .crop-toggle:hover {
+            color: #e0e0e0;
+            border-color: #666;
+        }
+
+        .crop-toggle.active {
+            color: #4a9eff;
+            border-color: #4a9eff;
+        }
+
         .remove-btn {
             background: none;
             border: none;
@@ -116,6 +141,117 @@
 
         .remove-btn:hover {
             color: #ff4444;
+        }
+
+        .crop-controls {
+            display: none;
+            margin-top: 12px;
+            padding: 12px;
+            background: #202020;
+            border-radius: 4px;
+            border: 1px solid #333;
+        }
+
+        .crop-controls.show {
+            display: block;
+        }
+
+        .waveform-container {
+            position: relative;
+            height: 80px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            margin-bottom: 12px;
+            overflow: hidden;
+            border: 1px solid #333;
+        }
+
+        .waveform {
+            width: 100%;
+            height: 100%;
+        }
+
+        .crop-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+        }
+
+        .crop-region {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            background: rgba(74, 158, 255, 0.2);
+            border: 1px solid #4a9eff;
+            pointer-events: auto;
+            cursor: move;
+        }
+
+        .crop-handle {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 8px;
+            background: #4a9eff;
+            cursor: ew-resize;
+        }
+
+        .crop-handle.left {
+            left: -4px;
+        }
+
+        .crop-handle.right {
+            right: -4px;
+        }
+
+        .crop-inputs {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .crop-inputs label {
+            color: #888;
+            min-width: 40px;
+        }
+
+        .crop-inputs input {
+            background: #333;
+            border: 1px solid #444;
+            color: #e0e0e0;
+            padding: 4px 8px;
+            border-radius: 3px;
+            width: 60px;
+            font-size: 12px;
+        }
+
+        .crop-inputs input:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+
+        .play-btn {
+            background: #2a4a2a;
+            border: 1px solid #3a5a3a;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 4px 12px;
+            border-radius: 3px;
+            transition: all 0.2s;
+        }
+
+        .play-btn:hover {
+            background: #3a5a3a;
+        }
+
+        .play-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         .controls {
@@ -249,6 +385,7 @@
 
         let audioFiles = [];
         let audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        let currentlyPlaying = null;
 
         // Drag and drop handlers for file upload
         dropZone.addEventListener('click', () => fileInput.click());
@@ -284,7 +421,10 @@
                         audioFiles.push({
                             name: file.name,
                             buffer: audioBuffer,
-                            duration: audioBuffer.duration
+                            duration: audioBuffer.duration,
+                            startTime: 0,
+                            endTime: audioBuffer.duration,
+                            cropEnabled: false
                         });
                     } catch (error) {
                         showStatus(`Error loading ${file.name}: ${error.message}`, 'error');
@@ -308,19 +448,53 @@
                 item.draggable = true;
                 item.dataset.index = index;
                 
+                const effectiveDuration = file.cropEnabled ? (file.endTime - file.startTime) : file.duration;
+                
                 item.innerHTML = `
-                    <span class="drag-handle">≡</span>
-                    <span class="file-name">${file.name}</span>
-                    <span class="file-duration">${formatDuration(file.duration)}</span>
-                    <button class="remove-btn" data-index="${index}">×</button>
+                    <div class="file-header">
+                        <span class="drag-handle">≡</span>
+                        <span class="file-name">${file.name}</span>
+                        <span class="file-duration">${formatDuration(effectiveDuration)}</span>
+                        <button class="crop-toggle ${file.cropEnabled ? 'active' : ''}" data-index="${index}">
+                            ${file.cropEnabled ? 'Cropped' : 'Crop'}
+                        </button>
+                        <button class="remove-btn" data-index="${index}">×</button>
+                    </div>
+                    <div class="crop-controls ${file.cropEnabled ? 'show' : ''}" data-index="${index}">
+                        <div class="waveform-container">
+                            <canvas class="waveform" data-index="${index}"></canvas>
+                            <div class="crop-overlay">
+                                <div class="crop-region" data-index="${index}">
+                                    <div class="crop-handle left"></div>
+                                    <div class="crop-handle right"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="crop-inputs">
+                            <label>Start:</label>
+                            <input type="number" class="start-input" data-index="${index}" 
+                                   value="${file.startTime.toFixed(2)}" min="0" max="${file.duration.toFixed(2)}" step="0.01">
+                            <label>End:</label>
+                            <input type="number" class="end-input" data-index="${index}" 
+                                   value="${file.endTime.toFixed(2)}" min="0" max="${file.duration.toFixed(2)}" step="0.01">
+                            <button class="play-btn" data-index="${index}">Play</button>
+                        </div>
+                    </div>
                 `;
                 
                 fileList.appendChild(item);
+                
+                if (file.cropEnabled) {
+                    requestAnimationFrame(() => {
+                        drawWaveform(index);
+                        updateCropRegion(index);
+                    });
+                }
             });
             
             // Add event listeners after elements are created
             setupDragAndDrop();
-            setupRemoveButtons();
+            setupEventListeners();
         }
 
         function setupDragAndDrop() {
@@ -328,13 +502,13 @@
 
             document.querySelectorAll('.file-item').forEach(item => {
                 item.addEventListener('dragstart', (e) => {
-                    draggedIndex = parseInt(e.currentTarget.dataset.index);
-                    e.currentTarget.classList.add('dragging');
+                    draggedIndex = parseInt(item.dataset.index);
+                    item.classList.add('dragging');
                     e.dataTransfer.effectAllowed = 'move';
                 });
 
                 item.addEventListener('dragend', (e) => {
-                    e.currentTarget.classList.remove('dragging');
+                    item.classList.remove('dragging');
                     document.querySelectorAll('.file-item').forEach(el => {
                         el.classList.remove('drag-over');
                     });
@@ -361,7 +535,7 @@
 
                 item.addEventListener('drop', (e) => {
                     e.preventDefault();
-                    const dropIndex = parseInt(e.currentTarget.dataset.index);
+                    const dropIndex = parseInt(item.dataset.index);
                     
                     if (draggedIndex !== null && draggedIndex !== dropIndex) {
                         // Reorder the array
@@ -379,12 +553,13 @@
                 });
 
                 item.addEventListener('dragleave', (e) => {
-                    e.currentTarget.classList.remove('drag-over');
+                    item.classList.remove('drag-over');
                 });
             });
         }
 
-        function setupRemoveButtons() {
+        function setupEventListeners() {
+            // Remove buttons
             document.querySelectorAll('.remove-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
@@ -398,6 +573,202 @@
                     }
                 });
             });
+
+            // Crop toggle buttons
+            document.querySelectorAll('.crop-toggle').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const index = parseInt(e.currentTarget.dataset.index);
+                    audioFiles[index].cropEnabled = !audioFiles[index].cropEnabled;
+                    renderFileList();
+                });
+            });
+
+            // Play buttons
+            document.querySelectorAll('.play-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const index = parseInt(e.currentTarget.dataset.index);
+                    playAudioSegment(index);
+                });
+            });
+
+            // Crop input handlers
+            document.querySelectorAll('.start-input').forEach(input => {
+                input.addEventListener('input', (e) => {
+                    const index = parseInt(e.target.dataset.index);
+                    const value = parseFloat(e.target.value);
+                    audioFiles[index].startTime = Math.max(0, Math.min(value, audioFiles[index].endTime - 0.01));
+                    updateCropRegion(index);
+                    renderFileList();
+                });
+            });
+
+            document.querySelectorAll('.end-input').forEach(input => {
+                input.addEventListener('input', (e) => {
+                    const index = parseInt(e.target.dataset.index);
+                    const value = parseFloat(e.target.value);
+                    audioFiles[index].endTime = Math.max(audioFiles[index].startTime + 0.01, Math.min(value, audioFiles[index].duration));
+                    updateCropRegion(index);
+                    renderFileList();
+                });
+            });
+
+            // Crop region drag handlers
+            setupCropRegionHandlers();
+        }
+
+        function setupCropRegionHandlers() {
+            document.querySelectorAll('.crop-region').forEach(region => {
+                const index = parseInt(region.dataset.index);
+                let isDragging = false;
+                let dragType = null; // 'region', 'left', 'right'
+                let dragStart = { x: 0, startTime: 0, endTime: 0 };
+
+                const leftHandle = region.querySelector('.left');
+                const rightHandle = region.querySelector('.right');
+
+                // Handle dragging
+                const startDrag = (e, type) => {
+                    isDragging = true;
+                    dragType = type;
+                    dragStart.x = e.clientX;
+                    dragStart.startTime = audioFiles[index].startTime;
+                    dragStart.endTime = audioFiles[index].endTime;
+                    e.preventDefault();
+                };
+
+                const doDrag = (e) => {
+                    if (!isDragging) return;
+                    
+                    const container = region.parentElement.parentElement;
+                    const rect = container.getBoundingClientRect();
+                    const deltaX = e.clientX - dragStart.x;
+                    const deltaTime = (deltaX / rect.width) * audioFiles[index].duration;
+                    
+                    if (dragType === 'left') {
+                        const newStart = Math.max(0, Math.min(dragStart.startTime + deltaTime, audioFiles[index].endTime - 0.01));
+                        audioFiles[index].startTime = newStart;
+                    } else if (dragType === 'right') {
+                        const newEnd = Math.max(audioFiles[index].startTime + 0.01, Math.min(dragStart.endTime + deltaTime, audioFiles[index].duration));
+                        audioFiles[index].endTime = newEnd;
+                    } else if (dragType === 'region') {
+                        const duration = dragStart.endTime - dragStart.startTime;
+                        let newStart = dragStart.startTime + deltaTime;
+                        newStart = Math.max(0, Math.min(newStart, audioFiles[index].duration - duration));
+                        audioFiles[index].startTime = newStart;
+                        audioFiles[index].endTime = newStart + duration;
+                    }
+                    
+                    updateCropRegion(index);
+                    updateCropInputs(index);
+                };
+
+                const stopDrag = () => {
+                    isDragging = false;
+                    dragType = null;
+                };
+
+                leftHandle.addEventListener('mousedown', (e) => startDrag(e, 'left'));
+                rightHandle.addEventListener('mousedown', (e) => startDrag(e, 'right'));
+                region.addEventListener('mousedown', (e) => {
+                    if (e.target === region) startDrag(e, 'region');
+                });
+
+                document.addEventListener('mousemove', doDrag);
+                document.addEventListener('mouseup', stopDrag);
+            });
+        }
+
+        function drawWaveform(index) {
+            const canvas = document.querySelector(`canvas[data-index="${index}"]`);
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const file = audioFiles[index];
+            const buffer = file.buffer;
+            
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            
+            const width = canvas.width;
+            const height = canvas.height;
+            
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(0, 0, width, height);
+            
+            // Draw waveform
+            const channelData = buffer.getChannelData(0);
+            const step = Math.ceil(channelData.length / width);
+            
+            ctx.strokeStyle = '#4a9eff';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            
+            for (let x = 0; x < width; x++) {
+                let min = 1.0;
+                let max = -1.0;
+                
+                for (let j = 0; j < step; j++) {
+                    const index = Math.floor(x * step + j);
+                    if (index < channelData.length) {
+                        const sample = channelData[index];
+                        if (sample < min) min = sample;
+                        if (sample > max) max = sample;
+                    }
+                }
+                
+                const y1 = (1 + min) * height / 2;
+                const y2 = (1 + max) * height / 2;
+                
+                ctx.moveTo(x, y1);
+                ctx.lineTo(x, y2);
+            }
+            
+            ctx.stroke();
+        }
+
+        function updateCropRegion(index) {
+            const region = document.querySelector(`.crop-region[data-index="${index}"]`);
+            if (!region) return;
+
+            const file = audioFiles[index];
+            const container = region.parentElement.parentElement;
+            const startPercent = (file.startTime / file.duration) * 100;
+            const endPercent = (file.endTime / file.duration) * 100;
+            
+            region.style.left = startPercent + '%';
+            region.style.width = (endPercent - startPercent) + '%';
+        }
+
+        function updateCropInputs(index) {
+            const startInput = document.querySelector(`.start-input[data-index="${index}"]`);
+            const endInput = document.querySelector(`.end-input[data-index="${index}"]`);
+            
+            if (startInput) startInput.value = audioFiles[index].startTime.toFixed(2);
+            if (endInput) endInput.value = audioFiles[index].endTime.toFixed(2);
+        }
+
+        async function playAudioSegment(index) {
+            if (currentlyPlaying) {
+                currentlyPlaying.stop();
+                currentlyPlaying = null;
+            }
+
+            const file = audioFiles[index];
+            const source = audioContext.createBufferSource();
+            source.buffer = file.buffer;
+            source.connect(audioContext.destination);
+            
+            const startTime = file.cropEnabled ? file.startTime : 0;
+            const duration = file.cropEnabled ? (file.endTime - file.startTime) : file.duration;
+            
+            source.start(0, startTime, duration);
+            currentlyPlaying = source;
+            
+            source.onended = () => {
+                currentlyPlaying = null;
+            };
         }
 
         function formatDuration(seconds) {
@@ -411,6 +782,10 @@
         }
 
         clearBtn.addEventListener('click', () => {
+            if (currentlyPlaying) {
+                currentlyPlaying.stop();
+                currentlyPlaying = null;
+            }
             audioFiles = [];
             renderFileList();
             updateExportButton();
@@ -430,20 +805,24 @@
                 let totalFrames = 0;
                 const cuePoints = [];
                 
-                // Add cue point at the beginning (optional, but common)
+                // Add cue point at the beginning
                 cuePoints.push({
                     position: 0,
-                    label: audioFiles[0].name.replace(/\.[^/.]+$/, '') // Remove extension
+                    label: audioFiles[0].name.replace(/\.[^/.]+$/, '')
                 });
                 
                 for (let i = 0; i < audioFiles.length; i++) {
+                    const file = audioFiles[i];
+                    const effectiveDuration = file.cropEnabled ? (file.endTime - file.startTime) : file.duration;
+                    const frames = Math.floor(effectiveDuration * 48000);
+                    
                     if (i > 0) {
                         cuePoints.push({
                             position: totalFrames,
-                            label: audioFiles[i].name.replace(/\.[^/.]+$/, '') // Remove extension
+                            label: file.name.replace(/\.[^/.]+$/, '')
                         });
                     }
-                    totalFrames += audioFiles[i].buffer.length;
+                    totalFrames += frames;
                 }
                 
                 // Create output buffer (stereo, 48kHz)
@@ -452,7 +831,12 @@
                 // Copy audio data
                 let currentFrame = 0;
                 for (let i = 0; i < audioFiles.length; i++) {
-                    const sourceBuffer = audioFiles[i].buffer;
+                    const file = audioFiles[i];
+                    const sourceBuffer = file.buffer;
+                    
+                    const startFrame = file.cropEnabled ? Math.floor(file.startTime * sourceBuffer.sampleRate) : 0;
+                    const endFrame = file.cropEnabled ? Math.floor(file.endTime * sourceBuffer.sampleRate) : sourceBuffer.length;
+                    const sourceFrames = endFrame - startFrame;
                     
                     for (let channel = 0; channel < 2; channel++) {
                         const outputData = outputBuffer.getChannelData(channel);
@@ -462,16 +846,18 @@
                         if (sourceBuffer.numberOfChannels > channel) {
                             sourceData = sourceBuffer.getChannelData(channel);
                         } else {
-                            // Use first channel for both if mono
                             sourceData = sourceBuffer.getChannelData(0);
                         }
                         
-                        for (let j = 0; j < sourceBuffer.length; j++) {
-                            outputData[currentFrame + j] = sourceData[j];
+                        // Copy the cropped section
+                        for (let j = 0; j < sourceFrames; j++) {
+                            if (currentFrame + j < totalFrames && startFrame + j < sourceData.length) {
+                                outputData[currentFrame + j] = sourceData[startFrame + j];
+                            }
                         }
                     }
                     
-                    currentFrame += sourceBuffer.length;
+                    currentFrame += sourceFrames;
                     progressBar.style.width = `${((i + 1) / audioFiles.length * 50)}%`;
                 }
                 
